@@ -8,14 +8,14 @@ import uasyncio as asio
 import aioespnow
 import network
 
-i2c_bus = I2C(0, sda=Pin(16), scl=Pin(17))
+i2c_bus = I2C(0, sda=Pin(21), scl=Pin(22))
 tcs = TCS34725(i2c_bus)
 tcs.gain(4)#gain must be 1, 4, 16 or 60
 tcs.integration_time(80)
-i2c_bus1 = I2C(1, sda=Pin(21), scl=Pin(22))
+i2c_bus1 = I2C(1, sda=Pin(17), scl=Pin(16))
 tof = VL53L0X(i2c_bus1)
 NUM_OF_LED = 2
-np = NeoPixel(Pin(13), NUM_OF_LED)
+np = NeoPixel(Pin(27), NUM_OF_LED)
 color=['Red','Yellow','White','Green','Black','Cyan','Blue','Magenta']
 dir_move=['Stop','Forward','Left','Right','Reverse']
 motor_L = MX1508(2, 4)
@@ -26,13 +26,21 @@ alfa=0.8
 debug=0
 
 R_W_count,W_count,col_id,col_id_l,direct,di,dist,busy,busy_col=0,0,0,0,0,0,500,0,0
+L_count=0
+delta = [0] *2
+d_count=0
 col_sel_r=4
-col_sel=['Cyan','Magenta']
+col_sel=["White"]
 R_m_pin = Pin(32, Pin.IN)
 L_m_pin = Pin(25, Pin.IN)
 
-motor_R.forward(Sp)
-motor_L.forward(Sp)
+motor_R.forward(1023)
+motor_L.forward(1023)
+
+"""
+C8F09E52660C
+C8F09E4E9CA8
+E05A1B757D04
 
 # A WLAN interface must be active to send()/recv()
 network.WLAN(network.STA_IF).active(True)
@@ -45,7 +53,7 @@ peer = b'\xC8\xF0\x9E\x4E\x9C\xA8' #C8F09E4E9CA8
 e.add_peer(peer)
 peer = b'\xCC\xDB\xA7\x56\x9C\x0C' #CCDBA7569C0C
 e.add_peer(peer)
-
+"""
 
 def R_W_int(pin):
     global W_count,R_W_count
@@ -53,51 +61,55 @@ def R_W_int(pin):
     R_W_count+=1
     
 def L_W_int(pin):
-    global W_count
-    W_count-=1
+    global L_count
+    L_count+=1
    
 R_m_pin.irq(trigger=Pin.IRQ_FALLING |Pin.IRQ_RISING , handler=R_W_int) #t    rigger=Pin.IRQ_FALLING | 
 L_m_pin.irq(trigger=Pin.IRQ_FALLING |Pin.IRQ_RISING , handler=L_W_int)
 
 async def synch(int_ms):
+    global W_count,L_count, direct,d_count
+    Sp1=int(Sp*0.6)
+    print(Sp1)
+    U_count = 10
     while 1:
         await asio.sleep_ms(int_ms)
-        Sp1=int(Sp/(abs(W_count)+1))
+        await spin(1)
         if direct==0:
-            if W_count>0:
+            if d_count>U_count:
                 motor_R.forward(Sp1)
                 motor_L.forward(Sp)
-            elif W_count<0:
+            elif d_count<-U_count:
                 motor_R.forward(Sp)
                 motor_L.forward(Sp1)
             else:
                 motor_R.forward(Sp)
                 motor_L.forward(Sp)
-        elif direct==1:
-            if W_count>0:
+        if direct==1:
+            if d_count>U_count:
                 motor_R.forward(Sp1)
                 motor_L.reverse(Sp)
-            elif W_count<0:
+            elif d_count<-U_count:
                 motor_R.forward(Sp)
                 motor_L.reverse(Sp1)
             else:
                 motor_R.forward(Sp)
                 motor_L.reverse(Sp)
         elif direct==2:
-            if W_count>0:
+            if d_count>U_count:
                 motor_R.reverse(Sp1)
                 motor_L.forward(Sp)
-            elif W_count<0:
+            elif d_count<-U_count:
                 motor_R.reverse(Sp)
                 motor_L.forward(Sp1)
             else:
                 motor_R.reverse(Sp)
                 motor_L.forward(Sp)        
         elif direct==3:
-            if W_count>0:
+            if d_count>U_count:
                 motor_R.reverse(Sp1)
                 motor_L.reverse(Sp)
-            elif W_count<0:
+            elif d_count<-U_count:
                 motor_R.reverse(Sp)
                 motor_L.reverse(Sp1)
             else:
@@ -107,6 +119,14 @@ async def synch(int_ms):
             motor_R.reverse(0)
             motor_L.reverse(0)
 
+async def spin(int_ms):
+    global W_count,L_count, direct,delta 
+    await asio.sleep_ms(int_ms*100)
+    delta[1]=W_count-L_count
+    d_count=delta[1]-delta[0]
+    delta[0]=delta[1]
+    print(direct,d_count)
+        
 async def W_sp(int_ms):
     global di,direct,busy_col
     while 1:
@@ -132,7 +152,7 @@ async def W_sp(int_ms):
             direct=3
             await move(8)
             direct=2
-            await move(8)
+            await move(16)
         if  color[col_id] in col_sel:
             direct=-1
             busy_col=1
@@ -142,8 +162,8 @@ async def W_sp(int_ms):
             busy_col=0
         if color[col_sel_r] in col_sel:
             col_sel.remove(color[col_sel_r])
-        if debug:
-            print(col_sel)
+if debug:
+    print(col_sel)
                       
 async def move(turn):
     global R_W_count,busy
@@ -196,7 +216,7 @@ async def dist_det():
     dist=int(alfa*dist+(1-alfa)*dist_l)
     if debug:
         print('Distance is {}. W_count {}'.format(dist   ,W_count))
-            
+        
 async def LED_cont(int_ms):
     while 1:
         await asio.sleep_ms(int_ms)
@@ -247,11 +267,10 @@ async def resive(e,int_ms):
 loop = asio.get_event_loop()
 
 #create looped tasks
-loop.create_task(synch(2))
 loop.create_task(W_sp(100))
+loop.create_task(synch(5))
 loop.create_task(LED_cont(100))
-loop.create_task(send(e,100))
-loop.create_task(resive(e,100))
+#loop.create_task(send(e, 100))
 # loop run forever
 loop.run_forever()
     
